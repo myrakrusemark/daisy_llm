@@ -55,12 +55,12 @@ class ContextHandlers:
 		self.chat = Chat()
 
 		#Get and set conversation_id from configs.yaml
-		self.conversation_id = None
+		self.conversation_id_from_configs = None
 		with open("configs.yaml", "r") as f:
 			configs = yaml.load(f)
 		if 'conversation_id' in configs:
-			self.conversation_id = configs.get("conversation_id")
-			logging.info("Using conversation id from configs: " + str(self.conversation_id))
+			self.conversation_id_from_configs = configs.get("conversation_id")
+			logging.info("Using conversation id from configs: " + str(self.conversation_id_from_configs))
 
 
 		self.db_path = db_path
@@ -77,11 +77,11 @@ class ContextHandlers:
 			cursor = conn.cursor()
 
 			# If conversation_id is not set, create a new conversation ID
-			if not self.conversation_id:
-				self.conversation_id = str(int(time.time()))
-
-				print_text("Creating new conversation: ", "yellow")
+			if self.conversation_id_from_configs:
+				self.conversation_id = self.conversation_id_from_configs
+				print_text("Using conversation id from configs: ", "yellow")
 				print_text(str(self.conversation_id), None, "\n")
+
 
 			logging.info("Conversation id: " + str(self.conversation_id))
 
@@ -168,6 +168,7 @@ class ContextHandlers:
 			del message_without_timestamp['timestamp']
 			messages_without_timestamp.append(message_without_timestamp)
 		return messages_without_timestamp
+	
 
 	def get_conversation_name_summary(self, limit=None):
 		with self.connection_pool.get_connection() as conn:
@@ -288,14 +289,16 @@ class ContextHandlers:
 			time.sleep(1)
 			logging.info("Updating conversation name and summary for: " + conv_id)
 
+			response_json = ""
 			while True:
 				prompt = """
 				Please respond with a name, and summary for this conversation.
 				1. The name should be a single word or short phrase, no more than 5 words."
 				2. The summary should be a fairly verbose summary of the conversation, as short as possible while still containing all of the important topics, names, places, and sentiment of conversation.
 				3. The output must follow the following JSON format: {"name": name, "summary": summary}
-				4. If the conversation is empty, please respond with "Empty"
+				4. If the conversation is empty, please respond with {"name": "Empty Conversation", "summary": "None"}
 				"""
+				response = ""
 				if messages:
 					messages.append(self.single_message_context('system', prompt, False))
 
@@ -303,19 +306,19 @@ class ContextHandlers:
 					response = self.chat.request(
 						messages=messages,
 						silent=False,
-						response_label=False
+						response_label=False,
+						tool_check=False
 					)
-				else:
-					response = '{"name": "Empty Conversation", "summary": "None"}'
-
 
 				# Extract the JSON response from the string
-				response_match = re.search(r"{.*}", response)
-				if response_match:
-					response_json = response_match.group(0)
-					break
-				else:
-					logging.error("Invalid response format while setting conversation name and summary. Trying again...")
+				if response:
+					response_match = re.search(r"{.*}", response)
+					print(response_match)
+					if response_match:
+						response_json = response_match.group(0)
+						break
+					else:
+						logging.error("Invalid response format while setting conversation name and summary. Trying again...")
 
 			# Convert the JSON response to an object
 			try:
@@ -344,18 +347,10 @@ class ContextHandlers:
 
 	def new_conversation(self):
 		# Generate a new conversation ID
-		conversation_id = str(int(time.time()))
-		logging.info("Creating a new conversation: " + conversation_id)
+		self.conversation_id = str(int(time.time()))
+		print_text("Creating new conversation: ", "yellow")
+		print_text(str(self.conversation_id), None, "\n")
 
-		# Set the new conversation ID in configs.yaml
-		with open("configs.yaml", "r") as f:
-			configs = yaml.load(f)
-		configs['conversation_id'] = conversation_id
-		with open("configs.yaml", "w") as f:
-			yaml.dump(configs, f)
-
-		# Update the conversation ID and load the context
-		self.conversation_id = conversation_id
 		self.load_context()
 
 	def get_conversation_name_by_id(self, conversation_id):
@@ -371,7 +366,7 @@ class ContextHandlers:
 			else:
 				return None
 			
-	def get_conversation_context_by_id(self, conversation_id, include_timestamp=True):
+	def get_conversation_context_by_id(self, conversation_id, include_timestamp=True, include_system=True):
 		# Check if the conversation ID exists in the database
 		with self.connection_pool.get_connection() as conn:
 			cursor = conn.cursor()
@@ -395,42 +390,14 @@ class ContextHandlers:
 					message = json.loads(row[0])
 					if not include_timestamp:
 						message.pop('timestamp', None)
-					context.append(message)
+					if include_system or message['role'] != 'system':
+						context.append(message)
 
 			return context
 		else:
 			return None
 
-	def set_conversation_by_id(self, conversation_id):
-		if str(conversation_id).isdigit():
-			conversation_id = int(conversation_id)
-		else:
-			return False
-			
-		logging.info("Setting conversation ID: " + str(conversation_id))
-		
-		# Check if the conversation ID exists in the database
-		with self.connection_pool.get_connection() as conn:
-			cursor = conn.cursor()
-			cursor.execute('''
-				SELECT id FROM conversations WHERE id = ?;
-			''', (conversation_id,))
-			row = cursor.fetchone()
-		
-		if row:
-			# Set the conversation ID in configs.yaml
-			with open("configs.yaml", "r") as f:
-				configs = yaml.load(f)
-			configs['conversation_id'] = conversation_id
-			with open("configs.yaml", "w") as f:
-				yaml.dump(configs, f)
-			
-			# Update the conversation ID and load the context
-			self.conversation_id = conversation_id
-			self.load_context()
-			return True
-		else:
-			return False
+
 		
 	def delete_conversation_by_id(self, conversation_id):
 		logging.info("Deleting conversation ID: " + conversation_id)

@@ -263,7 +263,7 @@ class ModuleLoader:
 		# Define a function that starts a new thread for a given hook instance
 		def start_instance(instance):
 			logging.info("Main_start: Running %s module: %s "+instance.__class__.__name__+" "+type(instance).__name__)
-			future = executor.submit(instance.main, self, self.ch)
+			future = executor.submit(instance.main)
 			return future
 
 		# Define a dictionary to keep track of running threads
