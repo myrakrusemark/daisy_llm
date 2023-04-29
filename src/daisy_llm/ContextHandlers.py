@@ -313,7 +313,7 @@ class ContextHandlers:
 				# Extract the JSON response from the string
 				if response:
 					response_match = re.search(r"{.*}", response)
-					print(response_match)
+
 					if response_match:
 						response_json = response_match.group(0)
 						break
