@@ -434,3 +434,23 @@ class ContextHandlers:
 			return True
 		else:
 			return False
+
+	def print_context(self, context=None):
+		if context:
+			context = context
+		else:
+			context = self.get_context()
+
+		"""Displays the messages stored in the messages attribute of ContectHandlers."""
+		for message in context:
+			# Check if the message role is in the list of roles to display
+			color = None
+			if message['role'] == "user":
+				color = "blue"
+			if message['role'] == "assistant":
+				color = "green"
+			if message['role'] == "system":
+				color = "red"
+			print_text(f"{message['role'].upper()}: ", color)
+			print_text(message['content'], None, "\n")
+

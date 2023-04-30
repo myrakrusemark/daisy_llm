@@ -186,16 +186,8 @@ class Chat:
 
 Tools:
 """
-				#Add all available tools to the prompt
-				for module in self.ml.get_available_modules():
-					if "tool_form_name" in module:
-						prompt += '{"name":"'
-						if "tool_form_name" in module:
-							prompt += module["tool_form_name"]+'", "arg":"'
-						if "tool_form_argument" in module:
-							prompt += module["tool_form_argument"]+'"}\n'
-						if "tool_form_description" in module:
-							prompt += module["tool_form_description"]+"\n\n"
+				tools_list = self.ml.build_tools_list_from_available_modules()
+				prompt += tools_list
 
 				#Get the last three messages and add them to the prompt
 				prompt += "Conversation:\n"
@@ -206,7 +198,6 @@ Tools:
 				message = [{'role': 'system', 'content': prompt}]
 				logging.info(prompt)
 
-			
 
 				response = self.request(
 					messages=message, 
@@ -219,77 +210,88 @@ Tools:
 
 				logging.info("Tool form response: "+str(response))
 
-				#Parse JSON response
-				data = None
-				start_index = response.find('[')
-				if start_index >= 0:
-					end_index = response.find(']', start_index) + 1
-					json_data = response[start_index:end_index]
-					try:
-						# Check if the input string matches the expected JSON format
-						if not re.fullmatch(r'\[.*\]', json_data):
-							# Input string does not match expected format
-							logging.warning('Input is not valid JSON')
-						else:
-							# Attempt to load the input string as JSON
-							try:
-								data = json.loads(json_data)
-								logging.info('Data:' + str(data))
-							except json.decoder.JSONDecodeError as e:
-								# Input string contains errors, attempt to fix them
-								logging.error('JSONDecodeError:', e)
-								
-								# Search for keys with missing values
-								match = json_data.search(json_data)
-								if match:
-									# Replace missing values with empty strings
-									fixed_str = json_data[:match.end()] + '""' + json_data[match.end()+1:]
-									logging.warning('Fixed input:', fixed_str)
-									try:
-										data = json.loads(fixed_str)
-										logging.info('Data:'+ str(data))
-									except json.decoder.JSONDecodeError:
-										logging.error('Could not fix input')
-								else:
-									logging.error('Could not fix input')
-	    
-						#data = json.loads(json_data)
+				tools = self.handle_tool_checker_response(response)
+				result = self.run_tools(tools, stop_event)
 
+				if result:
+					return_prompt = "Below is the response from the user's request. It is the information the user is requesting. Don't mention the existence of this information. Use it to continue the conversation. If the information is irrelevant to the conversation, then ignore it.\n\n"
+					return_prompt += "\n"+result+"\n"
 
-					except json.decoder.JSONDecodeError as e:
-						logging.error("JSONDecodeError: "+str(e))
-						data = None
-					if data and data[0] == "None":
-						data = None
-				else:
-					logging.warning("No JSON data found in string.")
-
-				logging.info("Tool form chosen: "+str(data))
+					return return_prompt
 				
-				prompt = ""
-				if data:
-					for d in data:
-						for module in self.ml.get_available_modules():
-							if "tool_form_name" in module:
-								if module["tool_form_name"] == d["name"]:
-									print_text("Tool: ", "green")
-									print_text(module["tool_form_name"] + " (" + d['arg']+")", None, "\n\n")
-
-									class_name = module["class_name"]
-									chat_request_inner_hook_instances = self.ml.get_hook_instances()["Chat_request_inner"]
-									for instance in chat_request_inner_hook_instances:
-										if instance.__class__.__name__ == class_name.split(".")[-1]:
-											logging.info("Found instance: "+instance.__class__.__name__)
-											result = instance.main(d['arg'], stop_event)
-
-											prompt += """Below is the response from the tool: """+module["tool_form_name"]+". It is the information the user is requesting.  Don't mention the existence of this information. Use it to continue the conversation. If the information is irrelevant to the conversation, then ignore it.\n"
-											prompt += "\n"+result+"\n"
-				if prompt:
-					return prompt
 				else:
 					logging.info("No data found.")
 					return False
+
 		return False
+
+	def handle_tool_checker_response(self, response):
+			#Parse JSON response
+		data = None
+		start_index = response.find('[')
+		if start_index >= 0:
+			end_index = response.find(']', start_index) + 1
+			json_data = response[start_index:end_index]
+			try:
+				# Check if the input string matches the expected JSON format
+				if not re.fullmatch(r'\[.*\]', json_data):
+					# Input string does not match expected format
+					logging.warning('Input is not valid JSON')
+				else:
+					# Attempt to load the input string as JSON
+					try:
+						data = json.loads(json_data)
+						logging.info('Data:' + str(data))
+					except json.decoder.JSONDecodeError as e:
+						# Input string contains errors, attempt to fix them
+						logging.error('JSONDecodeError:', e)
+						
+						# Search for keys with missing values
+						match = json_data.search(json_data)
+						if match:
+							# Replace missing values with empty strings
+							fixed_str = json_data[:match.end()] + '""' + json_data[match.end()+1:]
+							logging.warning('Fixed input:', fixed_str)
+							try:
+								data = json.loads(fixed_str)
+								logging.info('Data:'+ str(data))
+							except json.decoder.JSONDecodeError:
+								logging.error('Could not fix input')
+						else:
+							logging.error('Could not fix input')
+
+				#data = json.loads(json_data)
+
+
+			except json.decoder.JSONDecodeError as e:
+				logging.error("JSONDecodeError: "+str(e))
+				data = None
+			if data and data[0] == "None":
+				data = None
+		else:
+			logging.warning("No JSON data found in string.")
+
+		logging.info("Tool form chosen: "+str(data))
+		return data
+	
+	def run_tools(self, tools, stop_event):
+		result = ""
+		if tools:
+			for tool in tools:
+				for module in self.ml.get_available_modules():
+					if "tool_form_name" in module:
+						if module["tool_form_name"] == tool["name"]:
+							print_text("Tool: ", "green")
+							print_text(module["tool_form_name"] + " (" + tool['arg']+")", None, "\n\n")
+
+							class_name = module["class_name"]
+							chat_request_inner_hook_instances = self.ml.get_hook_instances()["Chat_request_inner"]
+							for instance in chat_request_inner_hook_instances:
+								if instance.__class__.__name__ == class_name.split(".")[-1]:
+									logging.info("Found instance: "+instance.__class__.__name__)
+									result += "["+instance.__class__.__name__+" response]\n"
+									result += instance.main(tool['arg'], stop_event)+"\n\n"
+		return result
 
 
 	def stream_queue_sentences(self, arguments_dict):
@@ -339,16 +341,20 @@ Tools:
 			sentence_queue_canceled[0] = True
 
 		time.sleep(0.01)
+		self.complete_sentence_queue(
+			sentence_queue_complete, 
+			text_stream, 
+			return_text, 
+			sound_stop_event)
+		return
+
+
+	def complete_sentence_queue(self, 
+				 sentence_queue_complete, 
+				 text_stream, 
+				 return_text, 
+				 sound_stop_event):
 		sentence_queue_complete[0] = True
 		return_text[0] = text_stream[0]
 		sound_stop_event.set()
 		logging.info("Sentence queue complete")
-		return
-
-
-	def display_messages(self, chat_handlers):
-		"""Displays the messages stored in the messages attribute of ContectHandlers."""
-		for message in chat_handlers.get_context():
-			# Check if the message role is in the list of roles to display
-			print(f"{message['role'].upper()}: {message['content']}\n\n")
-

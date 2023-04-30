@@ -298,3 +298,16 @@ class ModuleLoader:
 
 				# Wait for some time before checking for updates again
 				time.sleep(1)
+
+	def build_tools_list_from_available_modules(self):
+		prompt = ""
+		for module in self.get_available_modules():
+			if "tool_form_name" in module:
+				prompt += '{"name":"'
+				if "tool_form_name" in module:
+					prompt += module["tool_form_name"]+'", "arg":"'
+				if "tool_form_argument" in module:
+					prompt += module["tool_form_argument"]+'"}\n'
+				if "tool_form_description" in module:
+					prompt += module["tool_form_description"]+"\n\n"
+		return prompt
