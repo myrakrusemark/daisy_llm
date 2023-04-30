@@ -28,18 +28,15 @@ class ModuleLoader:
 	
 		if not ModuleLoader.initialized:
 			ModuleLoader.initialized = True
-
 			self.start_prompts = []
 			self.hook_instances = {}
 			self.loaded = False
-
 			self.stop_event = threading.Event()
 			self.thread = threading.Thread(target=self.update_configs_loop)
-
-			# Load modules
 			self.available_modules = []
+			self.enabled_modules = []
 
-
+			self.configs = {}
 			# Load enabled modules from config file
 			with open(self.configs_yaml, 'r') as f:
 				self.configs = yaml.load(f)
@@ -55,96 +52,95 @@ class ModuleLoader:
 	def get_hook_instances(self):
 		return self.hook_instances
 		
+
+
+
+
+
+
 	def get_available_modules(self):
 		if not self.loaded:
 			self.loaded = True
 			logging.info("Updating modules...")
-
-			self.enabled_modules = list(self.passed_modules) #Create a copy so that it does not get updated when appended to.
-
-			try:
-				with open(self.configs_yaml, 'r') as f:
-					self.configs = yaml.load(f)
-			except Exception as e:
-				logging.warning(f"Failed to load configs.yaml: {str(e)}")
-
-			if "enabled_modules" in self.configs:
-				if self.configs["enabled_modules"]:
-
-					#Add modules in configs.yaml to enabled_modules
-					for enabled_module in self.configs["enabled_modules"]:
-						if enabled_module not in self.enabled_modules: #Eliminates duplicates
-							self.enabled_modules.append(enabled_module)
-
-			#Set all modules as disabled and enable them as they are found
-			for available_module in self.available_modules:
-				available_module["enabled"] = False
-
-			for module_name in self.enabled_modules:
-				module_in_available = False
-
-				# If module is in configs.yaml and available_modules, it is enabled.
-				for available_module in self.available_modules:
-					if module_name == available_module["class_name"]:
-						available_module["enabled"] = True
-						module_in_available = True
-
-
-				# Add the module if it's NOT in available modules
-				if not module_in_available:
-					# Attempt to import the module, and handle exceptions.
-					try:
-						module = importlib.import_module(module_name, package=None)
-					except ModuleNotFoundError as e:
-						logging.warning(f"Failed to load {module_name} due to missing dependency: {str(e)}")
-						continue  # Skip this module and proceed with the next one
-
-					# Find all classes in the module, and extract their methods and initialization parameters.
-					for name in dir(module):
-
-						if name == module.__name__.split(".")[-1]:
-							obj = getattr(module, name)
-							if isinstance(obj, type):
-								module_hook = getattr(obj, "module_hook", "")
-
-								if module_hook and module_name:
-									class_description = getattr(obj, "description", "No description.")
-									tool_form_name = getattr(obj, "tool_form_name", None)
-									tool_form_description = getattr(obj, "tool_form_description", None)
-									tool_form_argument = getattr(obj, "tool_form_argument", None)
-
-									# Add module_hook and enabled attributes to module dictionary
-									module_dict = {}
-									module_dict["class_name"] = module_name
-									module_dict["description"] = class_description
-									module_dict["module_hook"] = module_hook
-									module_dict["enabled"] = True
-									if tool_form_name:
-										module_dict["tool_form_name"] = tool_form_name
-									if tool_form_description:
-										module_dict["tool_form_description"] = tool_form_description
-									if tool_form_argument:
-										module_dict["tool_form_argument"] = tool_form_argument
-
-									self.available_modules.append(module_dict)
-
-
-			# Notify status of modules
-			for available_module in self.available_modules:
-				if available_module['enabled']:
-					print_text("MODULE LOADED: ", "green", "", "italic")
-					print_text(available_module['class_name']+" to "+available_module['module_hook'], None, "\n")
-
-				else:
-					print_text("MODULE REMOVED: ", "red", "", "italic")
-					print_text(available_module['class_name']+" from "+available_module['module_hook'], None, "\n")
-
-			#If config.yaml item is no longer available, set enabled to False
-			for available_module in self.available_modules:
-				if available_module["class_name"] not in self.enabled_modules:
-					available_module["enabled"] = False
+			self.enabled_modules = list(self.passed_modules)
+			self.load_configs()
+			self.update_enabled_modules()
+			self.notify_module_status()
 			self.build_hook_instances()
 		return self.available_modules
+
+	def load_configs(self):
+		try:
+			with open(self.configs_yaml, 'r') as f:
+				self.configs = yaml.load(f)
+		except Exception as e:
+			logging.warning(f"Failed to load configs.yaml: {str(e)}")
+
+	def update_enabled_modules(self):
+		if "enabled_modules" in self.configs and self.configs["enabled_modules"]:
+			for enabled_module in self.configs["enabled_modules"]:
+				if enabled_module not in self.enabled_modules:
+					self.enabled_modules.append(enabled_module)
+
+		for available_module in self.available_modules:
+			available_module["enabled"] = False
+
+		for module_name in self.enabled_modules:
+			module_in_available = False
+			for available_module in self.available_modules:
+				if module_name == available_module["class_name"]:
+					available_module["enabled"] = True
+					module_in_available = True
+
+			if not module_in_available:
+				try:
+					module = importlib.import_module(module_name, package=None)
+				except ModuleNotFoundError as e:
+					logging.warning(f"Failed to load {module_name} due to missing dependency: {str(e)}")
+					continue
+
+				for name in dir(module):
+					if name == module.__name__.split(".")[-1]:
+						obj = getattr(module, name)
+						module_hook = getattr(obj, "module_hook", "")
+						if module_hook and module_name:
+							class_description = getattr(obj, "description", "No description.")
+							tool_form_name = getattr(obj, "tool_form_name", None)
+							tool_form_description = getattr(obj, "tool_form_description", None)
+							tool_form_argument = getattr(obj, "tool_form_argument", None)
+							module_dict = {
+								"class_name": module_name,
+								"description": class_description,
+								"module_hook": module_hook,
+								"enabled": True
+							}
+							if tool_form_name:
+								module_dict["tool_form_name"] = tool_form_name
+							if tool_form_description:
+								module_dict["tool_form_description"] = tool_form_description
+							if tool_form_argument:
+								module_dict["tool_form_argument"] = tool_form_argument
+							self.available_modules.append(module_dict)
+
+	def notify_module_status(self):
+		for available_module in self.available_modules:
+			if available_module['enabled']:
+				print_text("MODULE LOADED: ", "green", "", "italic")
+				print_text(available_module['class_name'] + " to " + available_module['module_hook'], None, "\n")
+			else:
+				print_text("MODULE REMOVED: ", "red", "", "italic")
+				print_text(available_module['class_name'] + " from " + available_module['module_hook'], None, "\n")
+
+		for available_module in self.available_modules:
+			if available_module["class_name"] not in self.enabled_modules:
+				available_module["enabled"] = False
+
+		self.build_hook_instances()
+
+		
+
+
+
 
 		
 	def build_hook_instances(self):
@@ -207,6 +203,29 @@ class ModuleLoader:
 		#Replace existing object with the new one
 		self.hook_instances = updated_hook_instances
 
+
+
+
+
+	def build_tools_list_from_available_modules(self):
+		prompt = ""
+		for module in self.get_available_modules():
+			if "tool_form_name" in module:
+				prompt += '{"name":"'
+				if "tool_form_name" in module:
+					prompt += module["tool_form_name"] + '", "arg":"'
+				if "tool_form_argument" in module:
+					prompt += module["tool_form_argument"] + '"}\n'
+				if "tool_form_description" in module:
+					prompt += module["tool_form_description"] + "\n\n"
+		return prompt
+
+
+
+
+
+
+
 	def update_configs_loop(self):
 		last_modified_time = 0
 		while True:
@@ -226,6 +245,11 @@ class ModuleLoader:
 	def stop_update_configs_loop_thread(self):
 		self.update_configs_loop_thread.stop()
 
+
+
+
+
+
 	def enable_module(self, module_name):
 		logging.info("Enabling module: " + module_name)
 		with open(self.configs_yaml, 'r') as f:
@@ -241,6 +265,11 @@ class ModuleLoader:
 			logging.warning(module_name + " is already enabled.")
 		time.sleep(0.5)
 		return self.get_available_modules()
+
+
+
+
+
 
 	def disable_module(self, module_name):
 		logging.info("Disabling module: " + module_name)
@@ -258,11 +287,17 @@ class ModuleLoader:
 		time.sleep(0.5)
 		return self.get_available_modules()
 
+
+
+
+
+
 	def process_main_start_instances(self):
 
 		# Define a function that starts a new thread for a given hook instance
 		def start_instance(instance):
 			logging.info("Main_start: Running %s module: %s "+instance.__class__.__name__+" "+type(instance).__name__)
+			print(instance)
 			future = executor.submit(instance.main)
 			return future
 
@@ -298,16 +333,3 @@ class ModuleLoader:
 
 				# Wait for some time before checking for updates again
 				time.sleep(1)
-
-	def build_tools_list_from_available_modules(self):
-		prompt = ""
-		for module in self.get_available_modules():
-			if "tool_form_name" in module:
-				prompt += '{"name":"'
-				if "tool_form_name" in module:
-					prompt += module["tool_form_name"]+'", "arg":"'
-				if "tool_form_argument" in module:
-					prompt += module["tool_form_argument"]+'"}\n'
-				if "tool_form_description" in module:
-					prompt += module["tool_form_description"]+"\n\n"
-		return prompt
