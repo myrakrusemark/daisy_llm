@@ -2,6 +2,11 @@
 Daisy is a Python platform designed to work with language model APIs such as OpenAI's GPT-3 and GPT-4. It includes a suite of classes and methods that can be used to converse with, extend capabilities, and augment the reasoning capacities of large language models.
 
 ### 🏁 Getting Started
+
+NOTES:
+Pytorch does not yet support python 3.12. This library uses pytorch in its commands process. You may modify the code to omit this step.
+FFPROBE is required. You can install FFMPEG in Windows using this guide: https://www.geeksforgeeks.org/how-to-install-ffmpeg-on-windows/
+
 Install package
 ```
 pip install daisy_llm

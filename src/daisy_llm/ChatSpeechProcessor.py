@@ -37,7 +37,15 @@ class ChatSpeechProcessor:
 		self.result_received = False
 		self.sounds = SoundManager()
 		self.engine = pyttsx3.init()
-		self.tokenizer = nltk.data.load('tokenizers/punkt/english.pickle')
+
+		# Download the tokenizer resource if it's not already done.
+		resource_url = 'tokenizers/punkt/english.pickle'
+		try:
+			nltk.data.find(resource_url)
+		except LookupError:
+			nltk.download('punkt')
+		self.tokenizer = nltk.data.load(resource_url)
+		
 		self.elapsed_time = 0
 		self.timeout_seconds = 0
 
@@ -47,6 +55,7 @@ class ChatSpeechProcessor:
 		self.threads = []  # keep track of all threads created
 
 		self.initialize_tts(self.ml)
+
 
 
 	def initialize_tts(self, ml):

@@ -10,7 +10,7 @@
 
 # Define the package metadata
 __name__ = 'daisy_llm'
-__version__ = '0.0.4'
+__version__ = '0.0.5'
 __author__ = 'Myra Krusemark'
 __email__ = 'daisy_llm_tools@myrakrusemark.com'
 

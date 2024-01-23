@@ -1,4 +1,5 @@
 import openai
+from openai import OpenAI
 import logging
 import nltk.data
 import threading
@@ -27,27 +28,22 @@ class Chat:
 		self.commh = ml.commh
 		self.csp = csp
 		self.sounds = SoundManager()
-
 		self.commh.data = self.commh.load_commands()
-
 		with open("configs.yaml", "r") as f:
 			self.configs = yaml.safe_load(f)
-		openai.api_key = self.configs["keys"]["openai"]
+		self.client = OpenAI(api_key=self.configs["keys"]["openai"])  # Directly passing the API key
 		self.speak_thoughts = self.configs["chaining"]["speak_thoughts"]
-
 		#nltk.data.load('tokenizers/punkt/english.pickle')
 
 	def request(self,
-	     messages,
+		 messages,
 		 stop_event=None,
 		 sound_stop_event=None,
 		 tts=None,
-		 tool_check=False,
-		 model="gpt-3.5-turbo",
+		 model="gpt-4",
 		 silent=False,
 		 response_label=True,
-		 temperature = 0.7,
-		 max_tokens = None
+		 temperature = 0.7
 		 ):
 		#Handle LLM request. Optionally convert to sentences and queue for tts, if needed.
 
@@ -73,27 +69,15 @@ class Chat:
 		while True:
 			try:
 				logging.info("Sending request to OpenAI model...")
-				if max_tokens: #What the hell is max_tokens default value?
-					response = openai.ChatCompletion.create(
-						model=model,
-						messages=messages,
-						temperature=temperature,
-						stream=True,
-						request_timeout=5,
-						max_tokens=max_tokens
-					)
-				else:
-					response = openai.ChatCompletion.create(
-						model=model,
-						messages=messages,
-						temperature=temperature,
-						stream=True,
-						request_timeout=5
-					)
+				stream = self.client.chat.completions.create(
+					model=model,
+					messages=messages,
+					temperature=temperature,
+					stream=True,
+				)
 
-				#Handle chunks. Optionally convert to sentences for sentence_queue, if needed.
 				arguments = {
-					'response': response,
+					'response': stream,
 					'text_stream': text_stream,
 					'sentences': sentences,
 					'sentence_queue_canceled': sentence_queue_canceled,
@@ -110,6 +94,7 @@ class Chat:
 				threads.append(t)
 
 				if tts:
+					# Assuming csp is a defined context for tts
 					self.csp.queue_and_tts_sentences(
 						tts=tts, 
 						sentences=sentences, 
@@ -117,47 +102,23 @@ class Chat:
 						sentence_queue_complete=sentence_queue_complete, 
 						stop_event=stop_event, 
 						sound_stop_event=sound_stop_event
-						)
+					)
 
 				while not return_text[0] and not stop_event.is_set():
 					time.sleep(0.1)  # wait a bit before checking again
 
-				# return response_complete and return_text[0] when return_text is set
-
 				t.join()
-
 				return return_text[0]
 			
-			# Handle different types of errors that may occur when sending request to OpenAI model
-			except openai.error.Timeout as e:
-				logging.error(f"Timeout: {e}")
-				#self.csp.tts("TimeoutError Error. Check your internet connection.")
-			except openai.error.APIConnectionError as e:
-				logging.error(f"APIConnectionError: {e}")
-				#self.csp.tts("APIConnectionError. Sorry, I can't talk right now.")
-			except openai.error.InvalidRequestError as e:
-				logging.error(f"Invalid Request Error: {e}")
-				#self.csp.tts("Invalid Request Error. Sorry, I can't talk right now.")
-				return False        
 			except openai.APIError as e:
 				logging.error(f"API Error: {e}")
-				#self.csp.tts("API Error. Sorry, I can't talk right now.")
-			except openai.error.RateLimitError as e:
-				logging.error(f"RateLimitError: {e}")
-				#self.csp.tts("Rate Limit Error. Sorry, I can't talk right now.")
-			except ValueError as e:
-				logging.error(f"Value Error: {e}")
-				#self.csp.tts("Value Error. Sorry, I can't talk right now.")
+				# Handle other specific exceptions as needed
 				return False    
-			except TypeError as e:
-				logging.error("Type Error:"+e)
-				#self.csp.tts("Type Error. Sorry, I can't talk right now.")
-				return False  
-			
+
 			i += 1
 			if i == 3:
 				logging.error("OpenAI model request failed 3 times. Aborting.")
-				return False	
+				return False
 
 	def determine_and_run_commands(
 			self, 
@@ -187,8 +148,7 @@ class Chat:
 
 					command = None
 					command_argument = None
-					#command_argument = self.get_command_argument(task, command, description, argument_format, stop_event)
-
+ 
 					task_complete_answer = None
 					ask_question = None
 					reasoning_context = []
@@ -202,7 +162,7 @@ class Chat:
 									module_output = "[Output from "+class_name+": "+command_argument+"]\n"
 									module_output += instance.main(command_argument, stop_event)+"\n\n"
 									reasoning_context.append(self.ch.single_message_context("user", module_output, False))
-									print_text("Chaining (Module Output): ", "yellow")
+									print_text("\nChaining (Module Output): ", "yellow")
 									print_text(module_output, None, "\n")
 									time.sleep(1)
 
@@ -210,16 +170,15 @@ class Chat:
 									break
 						
 						#Check for task completion
-						#task_complete_answer = self.check_for_task_completion(task, reasoning_context, stop_event)
-						#if task_complete_answer:
-						#	break
+						task_complete_answer = self.check_for_task_completion(task, reasoning_context, stop_event)
+						if task_complete_answer:
+							break
 						
 						#Check validity and determine next steps
 						reasoning_prompt = self.generate_reasoning_prompt(task, stop_event)
 						reasoning_context_copy = reasoning_context.copy()
 						reasoning_context_copy.append(self.ch.single_message_context("user", reasoning_prompt, False))
-						#print(reasoning_context_copy)
-						print_text("Chaining (Assistant Reasoning): ", "yellow")
+						print_text("\nChaining (Assistant Reasoning): ", "yellow")
 						response = self.request(
 							messages=reasoning_context_copy, 
 							model="gpt-4", #Best at choosing tools
@@ -294,33 +253,30 @@ class Chat:
 
 	def check_for_task_completion(self, task, reasoning_context, stop_event):
 		#Check for task completion
-		print_text("Chaining (Completion Check): ", "yellow")
+		#print_text("Chaining (Completion Check / Task done?): ", "yellow")
 		completion_prompt = "Task: "+task
 		completion_prompt += "Does the content of this conversation indicate the task is complete? (Yes/No)"
 		reasoning_context_copy = reasoning_context.copy()
 		reasoning_context_copy.append(self.ch.single_message_context("user", completion_prompt, False))
-		#print(reasoning_context_copy)
 		response = self.request(
 			messages=reasoning_context_copy, 
-			model="gpt-4", #Best at choosing tools
+			model="gpt-4",
 			stop_event=stop_event, 
 			response_label=False,
-			max_tokens=10
+			silent=True
 		)
 		if "yes" in response.lower():
 			reasoning_context_copy.append(self.ch.single_message_context("user", response, False))
 
 			#Get completion reason
-			print_text("Chaining (Completion Reasoning): ", "yellow")
+			print_text("\nChaining (Completion Reasoning): ", "yellow")
 			completion_reason_prompt = "In ONE sentence, respond to the task and describe what's been done."
 			reasoning_context_copy.append(self.ch.single_message_context("user", completion_reason_prompt, False))
-			#print(reasoning_context_copy)
 			response = self.request(
 				messages=reasoning_context_copy, 
-				model="gpt-4", #Best at choosing tools
+				model="gpt-4",
 				stop_event=stop_event, 
-				response_label=False,
-				max_tokens=200
+				response_label=False
 			)
 			return response
 		else:
@@ -340,8 +296,7 @@ class Chat:
 				stop_event=stop_event,
 				response_label=False,
 				temperature=0,
-				silent=silent,
-				max_tokens=10
+				silent=silent
 			)
 			if "true" in str(response.lower()):
 				return True
@@ -358,10 +313,11 @@ class Chat:
 		prompt += "3. If the task requires more than one logical step, respond with a shorter, clear, concise task for the first logical step. Limit prose.\n"
 		prompt += "Task: "+task+"\n"
 		message = [self.ch.single_message_context('system', prompt, False)]
+		#print("clarify_task",prompt)
 
 		response = self.request(
 			messages=message, 
-			model="gpt-4", #Best at choosing tools
+			model="gpt-4",
 			stop_event=stop_event, 
 			response_label=False,
 			silent=True
@@ -378,14 +334,14 @@ class Chat:
 		prompt += "Command: "+command+"\n"
 		prompt += "Description: "+description+"\n"
 		prompt += "Argument format: "+argument+"\n"
+		#print("get_command_argument",prompt)
 
-		#print_text(prompt)
 
 		print_text("ARGUMENT ("+command+"): ", "green")
 		message = [self.ch.single_message_context('system', prompt, False)]
 		response = self.request(
 				messages=message, 
-				model="gpt-4", #Best at choosing tools
+				model="gpt-4",
 				stop_event=stop_event, 
 				response_label=False
 			)
@@ -419,6 +375,7 @@ class Chat:
 		prompt += "6. If the conversation is looping, Ask the user for more information.\n"
 		prompt += "7. Be diligent about when the task is complete. If enough information has been gathered or the steps have been completed, run TaskComplete command.\n"
 		prompt += "8. Don't loop. If you are repeating yourself, or cannot find a solution, run TaskComplete command.\n"
+		#print("generate_reasoning_prompt", prompt)
 
 		return prompt
 	
@@ -441,10 +398,10 @@ class Chat:
 
 		message = self.ch.single_message_context('user', prompt, False)
 
+		#print("get_task_from_conversation",prompt)
 		response = self.request(
 			messages=[message],
 			stop_event=stop_event,
-			#temperature = 0,
 			response_label=False
 			)
 
@@ -515,41 +472,34 @@ class Chat:
 
 		try:
 			if not silent and response_label:
-				print_text("Daisy ("+model+"): ", "blue", "", "bold")
+				print_text("Daisy (" + model + "): ", "blue", "", "bold")
 
 			for chunk in response:
-				try:
-					if not sentence_queue_canceled[0]:
-						if not stop_event.is_set():
-							temp_sentences = []
-							collected_chunks.append(chunk)
-							chunk_message = chunk['choices'][0]['delta']
-							collected_messages.append(chunk_message)
-							text_stream[0] = ''.join([m.get('content', '') for m in collected_messages])
-							logging.debug(text_stream[0])
+				if chunk.choices and not sentence_queue_canceled[0] and not stop_event.is_set():
+					chunk_message = chunk.choices[0].delta
 
-							if not silent:
-								if 'content' in chunk_message:
-									print_text(chunk_message['content'])
-							
-							#Tokenize the text into sentences
-							temp_sentences = self.csp.nltk_sentence_tokenize(text_stream[0])
-							sentences[0] = temp_sentences  # put the sentences into the queue
-						else:
-							sentence_queue_canceled[0] = True
-							logging.info("Sentence queue canceled")
-							return
-				except ValueError as e:  # Handle the ValueError for each chunk
-					if 'invalid literal for int() with base 16' in str(e):
-						logging.error("stream_queue_sentences(): Error parsing a chunk of server response. Skipping this chunk and moving to the next one...")
-						traceback.print_exc()
-						continue  # Skip to the next chunk
+					if chunk_message:
+						# Directly access the 'content' attribute
+						text_content = chunk_message.content if chunk_message.content else ''
+						text_stream[0] += text_content
+						logging.debug(text_stream[0])
+
+						if not silent:
+							print_text(text_content)
+
+						# Tokenize the text into sentences
+						temp_sentences = self.csp.nltk_sentence_tokenize(text_stream[0])
+						sentences[0] = temp_sentences  # Update the sentence queue
+
 					else:
-						raise e
-			if not silent:
-				print_text("\n\n")
-		except requests.exceptions.ConnectionError as e:
-			logging.error("stream_queue_sentences(): Request timeout. Check your internet connection.")
+						sentence_queue_canceled[0] = True
+						logging.info("Sentence queue canceled")
+						break
+
+
+		except Exception as e:  # General exception handling
+			logging.error(f"stream_queue_sentences(): An error occurred: {e}")
+			traceback.print_exc()
 			sentence_queue_canceled[0] = True
 
 		time.sleep(0.01)

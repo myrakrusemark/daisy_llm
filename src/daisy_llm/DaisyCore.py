@@ -9,8 +9,8 @@ import pubsub as pub
 import queue
 import json
 import numpy as np
-import torch
-from scipy.spatial.distance import cosine
+#import torch
+#from scipy.spatial.distance import cosine
 
 from ruamel.yaml import YAML
 yaml = YAML()
